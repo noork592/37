@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
-  MapPin, Factory, Plus, Trash2, Route as RouteIcon, Save, Search, Loader2, ListChecks,
+  MapPin, Factory, Plus, Trash2, Route as RouteIcon, Save, Search, Loader2, ListChecks, Map as MapIcon, Satellite,
 } from "lucide-react";
 
 // Marker icon setup — react-leaflet's default markers 404 without this shim.
@@ -76,6 +76,7 @@ export default function TransportRoutes() {
   const [routes, setRoutes] = useState([]);
   const [saving, setSaving] = useState(false);
   const [routeName, setRouteName] = useState("");
+  const [mapStyle, setMapStyle] = useState("map"); // "map" | "satellite"
   const geocodeTimer = useRef(null);
 
   const loadFactory = async () => {
@@ -377,14 +378,32 @@ export default function TransportRoutes() {
 
       {/* Map */}
       <div className="bg-white border border-slate-200 rounded-sm overflow-hidden">
-        <div className="px-4 py-2 border-b border-slate-200 flex items-center gap-2">
+        <div className="px-4 py-2 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <Factory className="w-4 h-4 text-slate-700" />
           <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
             Map · Factory + destinations
           </span>
-          <span className="text-[10px] text-slate-400 ml-auto font-mono-num">
+          <span className="text-[10px] text-slate-400 font-mono-num">
             {factory.lat.toFixed(4)}, {factory.lng.toFixed(4)}
           </span>
+          <div className="ml-auto inline-flex rounded-sm border border-slate-200 overflow-hidden" role="tablist">
+            <button
+              type="button"
+              onClick={() => setMapStyle("map")}
+              className={`px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider inline-flex items-center gap-1 ${mapStyle === "map" ? "bg-[#E65100] text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+              data-testid="tr-map-style-map"
+            >
+              <MapIcon className="w-3.5 h-3.5" /> Map
+            </button>
+            <button
+              type="button"
+              onClick={() => setMapStyle("satellite")}
+              className={`px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider inline-flex items-center gap-1 border-l border-slate-200 ${mapStyle === "satellite" ? "bg-[#E65100] text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+              data-testid="tr-map-style-satellite"
+            >
+              <Satellite className="w-3.5 h-3.5" /> Satellite
+            </button>
+          </div>
         </div>
         <div style={{ height: 460 }} data-testid="tr-map">
           <MapContainer
@@ -393,10 +412,28 @@ export default function TransportRoutes() {
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
           >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png"
-            />
+            {mapStyle === "map" ? (
+              <TileLayer
+                key="osm-standard"
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maxZoom={19}
+              />
+            ) : (
+              <>
+                <TileLayer
+                  key="esri-imagery"
+                  attribution="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  maxZoom={19}
+                />
+                <TileLayer
+                  key="esri-ref"
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+                  maxZoom={19}
+                />
+              </>
+            )}
             <Marker position={[factory.lat, factory.lng]} icon={factoryIcon}>
               <Popup><b>Factory</b><br />{factory.label}</Popup>
             </Marker>
