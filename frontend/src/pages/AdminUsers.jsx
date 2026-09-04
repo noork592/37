@@ -286,7 +286,7 @@ export default function AdminUsers() {
                  </div>
                </div>
                <div className="flex items-center gap-2">
-                 <div className="hidden sm:flex items-center gap-2 mr-1 px-2 py-1 rounded-sm border border-slate-200 bg-slate-50"
+                 <div className="flex items-center gap-2 mr-1 px-2 py-1 rounded-sm border border-slate-200 bg-slate-50"
                       title="Require an email OTP as a second login step">
                    <span className="text-[10px] uppercase tracking-wider font-bold text-slate-600">OTP login</span>
                    <Switch

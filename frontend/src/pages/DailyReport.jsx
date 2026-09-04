@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import IstBadge from "@/components/IstBadge";
 import DispatchEditDialog from "@/components/DispatchEditDialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import TransportRoutes from "@/pages/TransportRoutes";
 
 /**
  * End-of-Day Dispatch Report — grouped by party.
@@ -322,13 +324,26 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
 
   return (
     <div className="space-y-5" data-testid="daily-report-page">
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.15em] text-[#E65100] font-bold">Reports</div>
+        <h1 className="font-heading text-2xl sm:text-3xl font-extrabold text-slate-900">Dispatch Report</h1>
+        <p className="text-slate-500 text-sm mt-1">
+          Consolidated end-of-day summary and transport route planning.
+        </p>
+      </div>
+      <Tabs defaultValue="daily" className="w-full">
+        <TabsList className="rounded-sm bg-slate-100 print:hidden">
+          <TabsTrigger value="daily" className="rounded-sm" data-testid="tab-daily">
+            Daily Dispatch Report
+          </TabsTrigger>
+          <TabsTrigger value="transport" className="rounded-sm" data-testid="tab-transport">
+            Transport Routes
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="daily" className="mt-4 space-y-5">
       <div className="flex items-end justify-between flex-wrap gap-3 print:hidden">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.15em] text-[#E65100] font-bold">Reports</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-extrabold text-slate-900">Dispatch Report</h1>
-          <p className="text-slate-500 text-sm mt-1">
-            Consolidated end-of-day summary grouped by party with item-wise pricing &amp; transport.
-          </p>
+        <div className="text-sm text-slate-500">
+          Grouped by party with item-wise pricing &amp; transport.
         </div>
         <div className="flex items-end gap-2">
           <div>
@@ -931,6 +946,11 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
           })}
         </div>
       )}
+        </TabsContent>
+        <TabsContent value="transport" className="mt-4">
+          <TransportRoutes />
+        </TabsContent>
+      </Tabs>
 
       <DispatchEditDialog
         open={!!editingDispatch}

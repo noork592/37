@@ -771,13 +771,12 @@ async def login(body: UserIn):
     if not user or not verify_password(body.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # ── Two-step verification (email OTP) — DISABLED ─────────────────────
+    # ── Two-step verification (email OTP) ────────────────────────────────
     # Optional email-OTP second step. Admin can turn this ON/OFF per user
     # from Admin → Users. When ON, the user must complete an email OTP as a
     # second step. The code is emailed to the same address configured for the
     # daily database backup, reusing those Gmail credentials.
-    # TEMPORARILY DISABLED: OTP login is turned off. Set to True to re-enable.
-    OTP_LOGIN_ENABLED = False
+    OTP_LOGIN_ENABLED = True
     if OTP_LOGIN_ENABLED and user.get("otp_login"):
         import random
         code = f"{random.randint(0, 999999):06d}"
@@ -7605,10 +7604,166 @@ async def ai_summary_dispatch(
         raise HTTPException(status_code=500, detail=f"Summary failed: {e}")
 
 
+# ======================== Transport Routes (map + optimizer) ================
+FACTORY_LOCATION = {
+    "lat": 30.8978257,
+    "lng": 75.8528076,
+    "label": "JK Products Factory",
+}
+
+
+class TransportStop(BaseModel):
+    customer: str
+    material: str
+    destination: str  # human-readable address the operator typed
+    lat: float
+    lng: float
+
+
+class TransportRouteCreate(BaseModel):
+    name: str
+    stops: List[TransportStop]
+    optimized_order: Optional[List[int]] = None  # indices into stops
+    total_distance_km: Optional[float] = None
+    total_duration_min: Optional[float] = None
+    geometry: Optional[str] = None  # encoded polyline from OSRM
+
+
+class GeocodeIn(BaseModel):
+    q: str
+
+
+class OptimizeIn(BaseModel):
+    stops: List[TransportStop]
+
+
+@api_router.get("/transport/factory")
+async def transport_factory(_user=Depends(get_current_user)):
+    return FACTORY_LOCATION
+
+
+@api_router.post("/transport/geocode")
+async def transport_geocode(body: GeocodeIn, _user=Depends(get_current_user)):
+    """Free-text → best {lat,lng,display_name} via Nominatim (OpenStreetMap)."""
+    q = (body.q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Query is empty")
+    import httpx as _httpx
+    headers = {"User-Agent": "JKProducts-TransportPlanner/1.0"}
+    params = {"q": q, "format": "jsonv2", "limit": 5, "addressdetails": 0}
+    try:
+        async with _httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://nominatim.openstreetmap.org/search", params=params, headers=headers)
+            r.raise_for_status()
+            arr = r.json() or []
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Geocoding failed: {e}")
+    results = [
+        {"lat": float(x["lat"]), "lng": float(x["lon"]), "display_name": x.get("display_name", "")}
+        for x in arr
+    ]
+    return {"results": results}
+
+
+@api_router.post("/transport/optimize")
+async def transport_optimize(body: OptimizeIn, _user=Depends(get_current_user)):
+    """Compute a good factory→stops route using the free OSRM public server.
+    Uses the /trip endpoint (roundtrip=false, source=first) — a TSP-ish
+    solver over real road distances. Falls back to a nearest-neighbour
+    haversine ordering if OSRM is unreachable so the UI keeps working.
+    """
+    stops = body.stops or []
+    if not stops:
+        raise HTTPException(status_code=400, detail="At least one stop is required")
+    factory = f"{FACTORY_LOCATION['lng']},{FACTORY_LOCATION['lat']}"
+    coord_list = [factory] + [f"{s.lng},{s.lat}" for s in stops]
+    coords = ";".join(coord_list)
+    url = f"https://router.project-osrm.org/trip/v1/driving/{coords}"
+    params = {"source": "first", "roundtrip": "false", "overview": "full", "geometries": "polyline"}
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+        if data.get("code") != "Ok" or not data.get("trips"):
+            raise RuntimeError(data.get("message") or "OSRM did not return a trip")
+        trip = data["trips"][0]
+        # waypoints[i].waypoint_index gives the visit order for input i
+        wps = data.get("waypoints") or []
+        # Skip index 0 which is the factory; return 0-based indices into `stops`.
+        order = [0] * (len(coord_list) - 1)
+        for i, wp in enumerate(wps):
+            if i == 0:
+                continue  # factory
+            visit_pos = int(wp.get("waypoint_index", i))  # 0..N
+            # visit_pos==0 means the factory; stop's actual visit rank is visit_pos
+            order[visit_pos - 1] = i - 1
+        return {
+            "ok": True,
+            "engine": "osrm",
+            "order": order,
+            "total_distance_km": round((trip.get("distance") or 0) / 1000.0, 2),
+            "total_duration_min": round((trip.get("duration") or 0) / 60.0, 1),
+            "geometry": trip.get("geometry", ""),
+        }
+    except Exception as e:
+        logger.warning("OSRM trip failed, using haversine fallback: %s", e)
+
+    # ── Fallback: nearest-neighbour over straight-line (haversine) distance ──
+    from math import radians, sin, cos, asin, sqrt
+    def hav(a, b):
+        lat1, lon1 = radians(a[0]), radians(a[1])
+        lat2, lon2 = radians(b[0]), radians(b[1])
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        h = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        return 2 * 6371.0 * asin(sqrt(h))
+    pts = [(s.lat, s.lng) for s in stops]
+    remaining = list(range(len(pts)))
+    order: List[int] = []
+    cur = (FACTORY_LOCATION["lat"], FACTORY_LOCATION["lng"])
+    total = 0.0
+    while remaining:
+        nxt = min(remaining, key=lambda i: hav(cur, pts[i]))
+        total += hav(cur, pts[nxt])
+        order.append(nxt)
+        cur = pts[nxt]
+        remaining.remove(nxt)
+    return {
+        "ok": True,
+        "engine": "haversine",
+        "order": order,
+        "total_distance_km": round(total, 2),
+        "total_duration_min": None,
+        "geometry": "",
+    }
+
+
+@api_router.get("/transport/routes")
+async def list_transport_routes(_user=Depends(get_current_user)):
+    docs = await db.transport_routes.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+
+@api_router.post("/transport/routes")
+async def create_transport_route(body: TransportRouteCreate, user=Depends(get_current_user)):
+    doc = body.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["created_at"] = now_iso()
+    doc["created_by"] = user.get("email") or user.get("username") or user.get("id")
+    await db.transport_routes.insert_one(dict(doc))
+    return doc
+
+
+@api_router.delete("/transport/routes/{rid}")
+async def delete_transport_route(rid: str, _user=Depends(require_admin)):
+    res = await db.transport_routes.delete_one({"id": rid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return {"ok": True}
+
+
 app.include_router(api_router)
-
-
-# ---- Kubernetes / deployment health probes ----
 # The platform's liveness/readiness probe calls `GET /health` at the ROOT
 # (no /api prefix). Without this route the probe gets a 404 and the pod is
 # marked unhealthy, which blocks the deployment from going live.
