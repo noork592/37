@@ -173,10 +173,172 @@ backend:
           
           7. Negative cases - all working correctly:
              - Empty stops in optimize → 400 (correct validation)
-             - Empty query in geocode → 400 (correct validation)
-             - No auth header → 403 (correct auth enforcement)
+
+  - task: "Transports master (name+coords) + backward-compat TransportStop"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoints on top of the previous Transport Routes API:
+            GET    /api/transports                          → list of transports sorted by name (all bearer-auth)
+            POST   /api/transports   {name,lat,lng}         → 200 saved doc {id,name,lat,lng,created_at,created_by}
+                                                              400 on empty name or out-of-range lat/lng
+                                                              409 on case-insensitive duplicate name
+            PATCH  /api/transports/{id}  {name?,lat?,lng?}  → 200 with the updated doc
+                                                              400 on empty new name, invalid coords, or empty body
+                                                              404 unknown id; 409 duplicate name
+            DELETE /api/transports/{id}                     → admin-only, 200 {ok:true}; 404 unknown; 403 for non-admins
+          Also updated `TransportStop` used by /api/transport/optimize and /api/transport/routes: every field is
+          now Optional except `lat` and `lng`; new optional `name` and `transport_id` fields were added. Existing
+          save/list/delete behaviour is unchanged.
+          Please test with admin@factory.com / admin123:
+            1) POST 3 transports: {"Ludhiana Depot",30.8978,75.8528}, {"Chandigarh Hub",30.7333,76.7794}, {"Delhi Yard",28.6139,77.2090}
+            2) GET /api/transports — expect all three, sorted alphabetically
+            3) Try POST with a duplicate name → 409; POST with lat=95 → 400; POST with empty name → 400
+            4) PATCH one transport to a new name+coords → 200 with updated doc; PATCH to a duplicate name → 409;
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 22 TESTS PASSED - TRANSPORTS MASTER ENDPOINTS FULLY WORKING
           
-          Note: Review request specified admin@jkproducts.local but actual seeded credentials are admin@factory.com / admin123 (from seed_db function). This is a minor documentation discrepancy, not a code issue. All tests passed using correct credentials.
+          Comprehensive testing completed for all new Transports master endpoints and backward compatibility.
+          
+          TEST RESULTS (22/22 PASSED):
+          
+          ✅ STEP 1: Create three transports (3/3 passed)
+             - POST /api/transports "Ludhiana Depot" → 200 OK (ID: a5af23e0-f151-4f29-9116-16571e90d3b6)
+             - POST /api/transports "Chandigarh Hub" → 200 OK (ID: 4bfb1a4b-8c02-4bb4-a2f2-025c809e3901)
+             - POST /api/transports "Delhi Yard" → 200 OK (ID: 88921bcc-e88a-4655-827d-4ecb7852a223)
+             - All responses include: id, name, lat, lng, created_at, created_by fields
+          
+          ✅ STEP 2: List transports - alphabetical sorting (1/1 passed)
+             - GET /api/transports → 200 OK
+             - Verified alphabetical order: ["Chandigarh Hub", "Delhi Yard", "Ludhiana Depot"]
+          
+          ✅ STEP 3: Negative cases on create (4/4 passed)
+             - POST duplicate name "LUDHIANA DEPOT" (case-insensitive) → 409 Conflict ✓
+             - POST empty name "" → 400 Bad Request ✓
+             - POST lat=95 (out of range) → 400 Bad Request ✓
+             - POST lng=200 (out of range) → 400 Bad Request ✓
+          
+          ✅ STEP 4: Update transport (PATCH) (4/4 passed)
+             - PATCH /api/transports/{id} valid update → 200 OK
+               Updated "Chandigarh Hub" to "Chandigarh Depot" with new coords (30.74, 76.78)
+             - PATCH duplicate name "Ludhiana Depot" → 409 Conflict ✓
+             - PATCH empty body {} → 400 Bad Request ✓
+             - PATCH unknown ID → 404 Not Found ✓
+          
+          ✅ STEP 5: Optimize with new TransportStop shape (1/1 passed)
+             - POST /api/transport/optimize with transport_id and name fields → 200 OK
+             - Response: {ok: true, engine: "osrm", order: [0,2,1], total_distance_km: 370.17}
+             - Verified backward compatibility: new optional fields (transport_id, name) accepted
+             - OSRM public server reachable (not using haversine fallback)
+          
+          ✅ STEP 6: Save, list, delete routes (3/3 passed)
+             - POST /api/transport/routes "Delhi-Chd Run" → 200 OK (ID: b235f608-5529-4200-ab2c-cccdd7bae37b)
+             - GET /api/transport/routes → 200 OK, saved route found in list
+             - DELETE /api/transport/routes/{id} → 200 OK {ok: true}
+          
+          ✅ STEP 7: Auth and role checks (4/4 passed)
+             - Non-admin DELETE /api/transports/{id} → 403 Forbidden ✓ (admin-only enforced)
+             - Non-admin GET /api/transports → 200 OK ✓ (all authenticated users can list)
+             - Non-admin POST /api/transports → 200 OK ✓ (all authenticated users can create)
+             - No auth header GET /api/transports → 403 Forbidden ✓
+          
+          ✅ STEP 8: Cleanup (3/3 passed)
+             - All test transports successfully deleted
+          
+          VALIDATION SUMMARY:
+          - ✅ CRUD operations working correctly (Create, Read, Update, Delete)
+          - ✅ Alphabetical sorting on GET /api/transports
+          - ✅ Case-insensitive duplicate name detection (409)
+          - ✅ Coordinate range validation (-90 to 90 lat, -180 to 180 lng)
+          - ✅ Empty name validation (400)
+          - ✅ Empty body validation on PATCH (400)
+          - ✅ 404 handling for unknown IDs
+          - ✅ Admin-only DELETE enforcement (403 for non-admins)
+          - ✅ Bearer token authentication working
+          - ✅ Backward compatibility: TransportStop with new optional fields (transport_id, name)
+          - ✅ Integration with /api/transport/optimize working
+          - ✅ Integration with /api/transport/routes (save/list/delete) working
+          
+          All endpoints returning correct status codes, proper error messages, and expected JSON responses.
+          No critical issues found. Feature is production-ready.
+
+  - task: "Transport pins show names + anti-overlap"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/TransportRoutes.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User reported pins were overlapping and showing "1, 2, 3, 4…" instead of the transport name.
+          Follow-up: user reported the previous "spread offset" was still overlapping visually. Rebuilt as clusters.
+          Fixes:
+          (a) Replaced the numbered droplet icon with a label pill (labelIcon) that shows the transport name
+              and a small badge for the visit order on the left.
+          (b) Replaced the earlier `spreadOverlaps` with `clusterByLocation` — when 2+ transports share the same
+              coordinates (rounded to 4 decimals ≈ ~11m) they now render as ONE cluster marker:
+                • Unselected: a blue "N transports here" pill (clusterIcon). Click → popup lists all names.
+                • Selected: an orange pill showing "orders · N here · name1, name2 +K" (selectedClusterIcon).
+                  Click → popup lists each stop with its visit order.
+              Single-transport locations still show their name (or dot when unselected). This makes overlapping
+              transports visible and self-explanatory instead of a stack of colliding pills.
+          (c) Selected labels get `zIndexOffset={1000+i}` (single) or `2000` (cluster) so labels stay above dots.
+          Verify:
+            1) Log in admin@factory.com / admin123, open Dispatch Report → Transport Routes.
+            2) Add 3 transports; give at least TWO of them the SAME lat/lng (e.g. 30.9, 75.85) so they overlap.
+               Also add a distinct third one (e.g. 28.6, 77.2).
+            3) Before selecting: on the map, the two overlapping ones must render as a SINGLE blue pill saying
+               "2 transports here". The third should be its own dot/label.
+            4) Tick the two overlapping transports — they should now render as ONE orange cluster pill with
+               "1/2 · 2 here · <names>" (no stacked pills).
+            5) Click the cluster — popup should list both transport names with their visit order.
+            6) Uncheck one — remaining one becomes a normal single label pill; the unselected one becomes a dot.
+
+  - task: "Google Maps deep link on Transport Routes"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/TransportRoutes.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Reverted the "path-style with names in parentheses" URL because user reported the route was NOT
+          navigating in Google Maps (Google couldn't parse "Name (lat, lng)" as a location and showed a
+          search failure). Restored the reliable `?api=1&…` universal URL where each stop is a plain
+          `lat,lng` pair. This means Google Maps will label waypoints A/B/C (limitation of the free URL API
+          — showing custom names requires Google Place IDs + a paid API key). The transport names still
+          show clearly on our in-app map labels and saved-route cards.
+          Verify:
+            1) Log in admin@factory.com / admin123 → Dispatch Report → Transport Routes.
+            2) Add 2 transports with real coordinates (e.g. "Sharma Transport" 30.90/75.85, "Delhi Depot" 28.61/77.20).
+            3) Tick both. Read the href of the "Open in Google Maps" button (data-testid="tr-open-gmaps"). It MUST:
+                • Start with `https://www.google.com/maps/dir/?api=1&`
+                • Contain `origin=30.897826,75.852808` (factory)
+                • Contain `destination=` with the final stop's coordinates
+                • Contain `waypoints=` with the intermediate stops joined by `%7C` (URL-encoded `|`) — only when 2+ stops
+                • Contain `travelmode=driving`
+                • NOT contain any transport names, `(lat, lng)` parentheses, or `data=` fragment
+            4) Save the route. On the saved-route card, the "Google Maps" button (`tr-gmaps-<id>`) href follows the same
+               rules and uses the saved `optimized_order` sequence.
+            5) Copy buttons still put the same URL on the clipboard.
+            6) Opening the URL in a new tab should render a real Google Maps directions page with the route drawn
+               (verify by parsing the URL — do not need to click through, as clicking may be blocked in headless).
+
 
     stuck_count: 0
     priority: "high"
@@ -337,11 +499,13 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 3
+  test_sequence: 4
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Google Maps deep link on Transport Routes"
+    - "Transport pins show names + anti-overlap"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -396,3 +560,29 @@ agent_communication:
       Screenshots saved: .screenshots/01-11_*.png
       
       Transport Routes feature is production-ready. No issues found.
+  - agent: "testing"
+    message: |
+      ✅ TRANSPORTS MASTER ENDPOINTS TESTING COMPLETE - ALL 22 TESTS PASSED
+      
+      Comprehensive testing of newly added Transports master CRUD endpoints completed successfully.
+      
+      SUMMARY:
+      - ✅ Create transports (POST /api/transports) - 3/3 passed
+      - ✅ List transports alphabetically (GET /api/transports) - 1/1 passed
+      - ✅ Negative cases (duplicate, empty name, invalid coords) - 4/4 passed
+      - ✅ Update transport (PATCH /api/transports/{id}) - 4/4 passed
+      - ✅ Optimize with new TransportStop shape (transport_id, name fields) - 1/1 passed
+      - ✅ Save/list/delete routes with new fields - 3/3 passed
+      - ✅ Auth and role checks (admin-only DELETE, bearer auth) - 4/4 passed
+      - ✅ Cleanup - 3/3 passed
+      
+      KEY VALIDATIONS:
+      - Case-insensitive duplicate name detection (409)
+      - Coordinate range validation (-90 to 90 lat, -180 to 180 lng)
+      - Empty name/body validation (400)
+      - Admin-only DELETE enforcement (403 for non-admins)
+      - Backward compatibility with TransportStop (new optional fields)
+      - Integration with optimize and routes endpoints working
+      
+      All endpoints returning correct status codes and JSON responses. No critical issues found.
+      Feature is production-ready.

@@ -7613,11 +7613,27 @@ FACTORY_LOCATION = {
 
 
 class TransportStop(BaseModel):
-    customer: str
-    material: str
-    destination: str  # human-readable address the operator typed
+    # Legacy fields kept optional so existing saved routes still deserialize.
+    customer: Optional[str] = None
+    material: Optional[str] = None
+    destination: Optional[str] = None
+    # The new, simplified transport model — a named point on the map.
+    name: Optional[str] = None
+    transport_id: Optional[str] = None
     lat: float
     lng: float
+
+
+class TransportCreate(BaseModel):
+    name: str
+    lat: float
+    lng: float
+
+
+class TransportUpdate(BaseModel):
+    name: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 
 class TransportRouteCreate(BaseModel):
@@ -7640,6 +7656,74 @@ class OptimizeIn(BaseModel):
 @api_router.get("/transport/factory")
 async def transport_factory(_user=Depends(get_current_user)):
     return FACTORY_LOCATION
+
+
+# ── Transports master (name + coordinates) ────────────────────────────────
+@api_router.get("/transports")
+async def list_transports(_user=Depends(get_current_user)):
+    docs = await db.transports.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+    return docs
+
+
+@api_router.post("/transports")
+async def create_transport(body: TransportCreate, user=Depends(get_current_user)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if not (-90 <= body.lat <= 90) or not (-180 <= body.lng <= 180):
+        raise HTTPException(status_code=400, detail="Coordinates are out of range")
+    existing = await db.transports.find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=409, detail="A transport with this name already exists")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "lat": float(body.lat),
+        "lng": float(body.lng),
+        "created_at": now_iso(),
+        "created_by": user.get("email") or user.get("username") or user.get("id"),
+    }
+    await db.transports.insert_one(dict(doc))
+    return doc
+
+
+@api_router.patch("/transports/{tid}")
+async def update_transport(tid: str, body: TransportUpdate, _user=Depends(get_current_user)):
+    patch: Dict[str, Any] = {}
+    if body.name is not None:
+        nm = body.name.strip()
+        if not nm:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        clash = await db.transports.find_one({
+            "id": {"$ne": tid},
+            "name": {"$regex": f"^{re.escape(nm)}$", "$options": "i"},
+        })
+        if clash:
+            raise HTTPException(status_code=409, detail="Another transport already uses this name")
+        patch["name"] = nm
+    if body.lat is not None:
+        if not (-90 <= body.lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude is out of range")
+        patch["lat"] = float(body.lat)
+    if body.lng is not None:
+        if not (-180 <= body.lng <= 180):
+            raise HTTPException(status_code=400, detail="Longitude is out of range")
+        patch["lng"] = float(body.lng)
+    if not patch:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    res = await db.transports.update_one({"id": tid}, {"$set": patch})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Transport not found")
+    doc = await db.transports.find_one({"id": tid}, {"_id": 0})
+    return doc
+
+
+@api_router.delete("/transports/{tid}")
+async def delete_transport(tid: str, _user=Depends(require_admin)):
+    res = await db.transports.delete_one({"id": tid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Transport not found")
+    return {"ok": True}
 
 
 @api_router.post("/transport/geocode")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend test for Transport Routes endpoints.
-Tests the newly added transport route planner endpoints.
+Backend test for Transports master endpoints
+Tests the newly added transports CRUD endpoints and their integration with optimize/routes
 """
 import requests
 import json
@@ -11,496 +11,465 @@ from typing import Dict, Any, Optional
 # Base URL from frontend/.env
 BASE_URL = "https://app-preview-3149.preview.emergentagent.com/api"
 
-# Test credentials (from seed_db in server.py)
+# Test credentials
 ADMIN_EMAIL = "admin@factory.com"
 ADMIN_PASSWORD = "admin123"
+USER_EMAIL = "user@factory.com"
+USER_PASSWORD = "user123"
 
-class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    RESET = '\033[0m'
+# Color codes for output
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
 
-def log_test(test_name: str):
-    print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-    print(f"{Colors.BLUE}TEST: {test_name}{Colors.RESET}")
-    print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")
-
-def log_pass(message: str):
-    print(f"{Colors.GREEN}✓ PASS: {message}{Colors.RESET}")
-
-def log_fail(message: str):
-    print(f"{Colors.RED}✗ FAIL: {message}{Colors.RESET}")
-
-def log_info(message: str):
-    print(f"{Colors.YELLOW}ℹ INFO: {message}{Colors.RESET}")
-
-def login() -> Optional[str]:
-    """Login and return the JWT token."""
-    log_test("Step 0: Login as admin")
-    url = f"{BASE_URL}/auth/login"
-    payload = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
+class TestResult:
+    def __init__(self):
+        self.passed = 0
+        self.failed = 0
+        self.failures = []
     
+    def pass_test(self, name: str, detail: str = ""):
+        self.passed += 1
+        print(f"{GREEN}✓ PASS{RESET}: {name}")
+        if detail:
+            print(f"  {detail}")
+    
+    def fail_test(self, name: str, detail: str):
+        self.failed += 1
+        self.failures.append(f"{name}: {detail}")
+        print(f"{RED}✗ FAIL{RESET}: {name}")
+        print(f"  {RED}{detail}{RESET}")
+    
+    def summary(self):
+        total = self.passed + self.failed
+        print(f"\n{'='*60}")
+        print(f"TEST SUMMARY: {self.passed}/{total} passed")
+        if self.failed > 0:
+            print(f"\n{RED}FAILED TESTS:{RESET}")
+            for f in self.failures:
+                print(f"  - {f}")
+        print(f"{'='*60}\n")
+        return self.failed == 0
+
+def login(email: str, password: str) -> Optional[str]:
+    """Login and return bearer token"""
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        log_info(f"POST {url}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            if "token" in data:
-                log_pass("Login successful, token received")
-                return data["token"]
-            else:
-                log_fail("Login response missing 'token' field")
-                return None
+        resp = requests.post(
+            f"{BASE_URL}/auth/login",
+            json={"email": email, "password": password},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("token")
         else:
-            log_fail(f"Login failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
+            print(f"{RED}Login failed for {email}: {resp.status_code} {resp.text}{RESET}")
             return None
     except Exception as e:
-        log_fail(f"Login request failed: {e}")
+        print(f"{RED}Login exception for {email}: {e}{RESET}")
         return None
 
-def test_factory_endpoint(token: str) -> bool:
-    """Test 1: GET /api/transport/factory"""
-    log_test("Step 1: GET /api/transport/factory")
-    url = f"{BASE_URL}/transport/factory"
-    headers = {"Authorization": f"Bearer {token}"}
+def make_request(method: str, endpoint: str, token: Optional[str] = None, 
+                 json_data: Optional[Dict] = None, expected_status: int = 200) -> tuple:
+    """Make HTTP request and return (status_code, response_json, success)"""
+    url = f"{BASE_URL}{endpoint}"
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        log_info(f"GET {url}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            # Verify expected structure
-            expected_lat = 30.8978257
-            expected_lng = 75.8528076
-            expected_label = "JK Products Factory"
-            
-            if "lat" in data and "lng" in data and "label" in data:
-                if (data["lat"] == expected_lat and 
-                    data["lng"] == expected_lng and 
-                    data["label"] == expected_label):
-                    log_pass("Factory endpoint returned correct location data")
-                    return True
-                else:
-                    log_fail(f"Factory data mismatch. Expected lat={expected_lat}, lng={expected_lng}, label='{expected_label}'")
-                    return False
-            else:
-                log_fail("Factory response missing required fields (lat, lng, label)")
-                return False
+        if method == "GET":
+            resp = requests.get(url, headers=headers, timeout=10)
+        elif method == "POST":
+            resp = requests.post(url, headers=headers, json=json_data, timeout=10)
+        elif method == "PATCH":
+            resp = requests.patch(url, headers=headers, json=json_data, timeout=10)
+        elif method == "DELETE":
+            resp = requests.delete(url, headers=headers, timeout=10)
         else:
-            log_fail(f"Factory endpoint failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
-            return False
+            return (0, {}, False)
+        
+        try:
+            resp_json = resp.json()
+        except:
+            resp_json = {"raw": resp.text}
+        
+        success = resp.status_code == expected_status
+        return (resp.status_code, resp_json, success)
     except Exception as e:
-        log_fail(f"Factory endpoint request failed: {e}")
-        return False
+        return (0, {"error": str(e)}, False)
 
-def test_geocode_endpoint(token: str) -> bool:
-    """Test 2: POST /api/transport/geocode"""
-    log_test("Step 2: POST /api/transport/geocode")
-    url = f"{BASE_URL}/transport/geocode"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"q": "Ludhiana, Punjab, India"}
+def test_transports_master():
+    """Test all Transports master endpoints per review request"""
+    result = TestResult()
     
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=20)
-        log_info(f"POST {url}")
-        log_info(f"Payload: {json.dumps(payload, indent=2)}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            if "results" in data and isinstance(data["results"], list):
-                if len(data["results"]) > 0:
-                    result = data["results"][0]
-                    if "lat" in result and "lng" in result and "display_name" in result:
-                        if isinstance(result["lat"], (int, float)) and isinstance(result["lng"], (int, float)):
-                            log_pass(f"Geocode successful: found {len(data['results'])} results")
-                            log_info(f"First result: {result['display_name']}")
-                            return True
-                        else:
-                            log_fail("Geocode result lat/lng are not numeric")
-                            return False
-                    else:
-                        log_fail("Geocode result missing required fields (lat, lng, display_name)")
-                        return False
-                else:
-                    log_fail("Geocode returned empty results array")
-                    return False
-            else:
-                log_fail("Geocode response missing 'results' array")
-                return False
-        elif response.status_code == 502:
-            log_info("Geocode returned 502 - this indicates outbound internet to Nominatim is blocked, not a code bug")
-            log_info(f"Response: {response.text}")
-            return True  # Not a code bug
-        else:
-            log_fail(f"Geocode endpoint failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        log_fail(f"Geocode endpoint request failed: {e}")
+    print(f"\n{BLUE}{'='*60}")
+    print("TRANSPORTS MASTER ENDPOINTS TEST")
+    print(f"{'='*60}{RESET}\n")
+    
+    # Login as admin
+    print(f"{YELLOW}→ Logging in as admin...{RESET}")
+    admin_token = login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    if not admin_token:
+        result.fail_test("Admin login", "Failed to get admin token")
+        result.summary()
         return False
-
-def test_optimize_endpoint(token: str) -> bool:
-    """Test 3: POST /api/transport/optimize"""
-    log_test("Step 3: POST /api/transport/optimize")
-    url = f"{BASE_URL}/transport/optimize"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {
+    result.pass_test("Admin login", f"Token: {admin_token[:20]}...")
+    
+    # Login as regular user for later tests
+    print(f"\n{YELLOW}→ Logging in as regular user...{RESET}")
+    user_token = login(USER_EMAIL, USER_PASSWORD)
+    if not user_token:
+        result.fail_test("User login", "Failed to get user token")
+    else:
+        result.pass_test("User login", f"Token: {user_token[:20]}...")
+    
+    # Store created transport IDs
+    transport_ids = {}
+    
+    # ========================================================================
+    # STEP 1: Create three transports
+    # ========================================================================
+    print(f"\n{BLUE}STEP 1: Create three transports{RESET}")
+    
+    transports_to_create = [
+        {"name": "Ludhiana Depot", "lat": 30.8978, "lng": 75.8528},
+        {"name": "Chandigarh Hub", "lat": 30.7333, "lng": 76.7794},
+        {"name": "Delhi Yard", "lat": 28.6139, "lng": 77.2090}
+    ]
+    
+    for t in transports_to_create:
+        status, data, success = make_request("POST", "/transports", admin_token, t, 200)
+        if success and "id" in data:
+            transport_ids[t["name"]] = data["id"]
+            result.pass_test(
+                f"Create transport: {t['name']}", 
+                f"ID: {data['id']}, created_at: {data.get('created_at')}, created_by: {data.get('created_by')}"
+            )
+        else:
+            result.fail_test(
+                f"Create transport: {t['name']}", 
+                f"Status {status}, Response: {json.dumps(data, indent=2)}"
+            )
+    
+    # ========================================================================
+    # STEP 2: GET /api/transports - verify all three, sorted alphabetically
+    # ========================================================================
+    print(f"\n{BLUE}STEP 2: List transports (should be sorted alphabetically){RESET}")
+    
+    status, data, success = make_request("GET", "/transports", admin_token, None, 200)
+    if success and isinstance(data, list):
+        # Filter to only our test transports
+        our_transports = [t for t in data if t.get("name") in transport_ids.keys()]
+        names = [t.get("name") for t in our_transports]
+        expected_order = ["Chandigarh Hub", "Delhi Yard", "Ludhiana Depot"]
+        
+        if names == expected_order:
+            result.pass_test(
+                "List transports (alphabetical order)", 
+                f"Order correct: {names}"
+            )
+        else:
+            result.fail_test(
+                "List transports (alphabetical order)", 
+                f"Expected {expected_order}, got {names}"
+            )
+    else:
+        result.fail_test(
+            "List transports", 
+            f"Status {status}, Response: {json.dumps(data, indent=2)}"
+        )
+    
+    # ========================================================================
+    # STEP 3: Negative cases on create
+    # ========================================================================
+    print(f"\n{BLUE}STEP 3: Negative cases on create{RESET}")
+    
+    # Case-insensitive duplicate
+    status, data, success = make_request(
+        "POST", "/transports", admin_token, 
+        {"name": "LUDHIANA DEPOT", "lat": 30, "lng": 75}, 
+        409
+    )
+    if success:
+        result.pass_test("Create duplicate (case-insensitive)", f"Got 409 as expected: {data.get('detail')}")
+    else:
+        result.fail_test("Create duplicate (case-insensitive)", f"Expected 409, got {status}: {data}")
+    
+    # Empty name
+    status, data, success = make_request(
+        "POST", "/transports", admin_token, 
+        {"name": "", "lat": 30, "lng": 75}, 
+        400
+    )
+    if success:
+        result.pass_test("Create with empty name", f"Got 400 as expected: {data.get('detail')}")
+    else:
+        result.fail_test("Create with empty name", f"Expected 400, got {status}: {data}")
+    
+    # Lat out of range
+    status, data, success = make_request(
+        "POST", "/transports", admin_token, 
+        {"name": "Bad", "lat": 95, "lng": 75}, 
+        400
+    )
+    if success:
+        result.pass_test("Create with lat out of range", f"Got 400 as expected: {data.get('detail')}")
+    else:
+        result.fail_test("Create with lat out of range", f"Expected 400, got {status}: {data}")
+    
+    # Lng out of range
+    status, data, success = make_request(
+        "POST", "/transports", admin_token, 
+        {"name": "Bad", "lat": 30, "lng": 200}, 
+        400
+    )
+    if success:
+        result.pass_test("Create with lng out of range", f"Got 400 as expected: {data.get('detail')}")
+    else:
+        result.fail_test("Create with lng out of range", f"Expected 400, got {status}: {data}")
+    
+    # ========================================================================
+    # STEP 4: PATCH /api/transports/{id}
+    # ========================================================================
+    print(f"\n{BLUE}STEP 4: Update transport (PATCH){RESET}")
+    
+    chd_id = transport_ids.get("Chandigarh Hub")
+    if not chd_id:
+        result.fail_test("PATCH tests", "Chandigarh Hub ID not found")
+    else:
+        # Valid update
+        status, data, success = make_request(
+            "PATCH", f"/transports/{chd_id}", admin_token,
+            {"name": "Chandigarh Depot", "lat": 30.74, "lng": 76.78},
+            200
+        )
+        if success and data.get("name") == "Chandigarh Depot":
+            transport_ids["Chandigarh Depot"] = chd_id
+            del transport_ids["Chandigarh Hub"]
+            result.pass_test(
+                "PATCH valid update", 
+                f"Updated to: {data.get('name')}, lat={data.get('lat')}, lng={data.get('lng')}"
+            )
+        else:
+            result.fail_test("PATCH valid update", f"Status {status}, Response: {data}")
+        
+        # Duplicate name
+        status, data, success = make_request(
+            "PATCH", f"/transports/{chd_id}", admin_token,
+            {"name": "Ludhiana Depot"},
+            409
+        )
+        if success:
+            result.pass_test("PATCH duplicate name", f"Got 409 as expected: {data.get('detail')}")
+        else:
+            result.fail_test("PATCH duplicate name", f"Expected 409, got {status}: {data}")
+        
+        # Empty body
+        status, data, success = make_request(
+            "PATCH", f"/transports/{chd_id}", admin_token,
+            {},
+            400
+        )
+        if success:
+            result.pass_test("PATCH empty body", f"Got 400 as expected: {data.get('detail')}")
+        else:
+            result.fail_test("PATCH empty body", f"Expected 400, got {status}: {data}")
+        
+        # Unknown ID
+        fake_id = "00000000-0000-0000-0000-000000000000"
+        status, data, success = make_request(
+            "PATCH", f"/transports/{fake_id}", admin_token,
+            {"name": "Test"},
+            404
+        )
+        if success:
+            result.pass_test("PATCH unknown ID", f"Got 404 as expected: {data.get('detail')}")
+        else:
+            result.fail_test("PATCH unknown ID", f"Expected 404, got {status}: {data}")
+    
+    # ========================================================================
+    # STEP 5: POST /api/transport/optimize with new shape
+    # ========================================================================
+    print(f"\n{BLUE}STEP 5: Optimize route with transport_id and name fields{RESET}")
+    
+    ludhiana_id = transport_ids.get("Ludhiana Depot")
+    delhi_id = transport_ids.get("Delhi Yard")
+    chd_depot_id = transport_ids.get("Chandigarh Depot")
+    
+    if not all([ludhiana_id, delhi_id, chd_depot_id]):
+        result.fail_test("Optimize test", f"Missing transport IDs: {transport_ids}")
+    else:
+        optimize_payload = {
+            "stops": [
+                {"transport_id": ludhiana_id, "name": "Ludhiana Depot", "lat": 30.8978, "lng": 75.8528},
+                {"transport_id": delhi_id, "name": "Delhi Yard", "lat": 28.6139, "lng": 77.2090},
+                {"transport_id": chd_depot_id, "name": "Chandigarh Depot", "lat": 30.74, "lng": 76.78}
+            ]
+        }
+        
+        status, data, success = make_request(
+            "POST", "/transport/optimize", admin_token,
+            optimize_payload,
+            200
+        )
+        
+        if success:
+            ok = data.get("ok")
+            order = data.get("order")
+            distance = data.get("total_distance_km")
+            engine = data.get("engine")
+            
+            checks = []
+            if ok is True:
+                checks.append("ok=true")
+            else:
+                checks.append(f"ok={ok} (expected true)")
+            
+            if isinstance(order, list) and len(order) == 3:
+                checks.append(f"order={order} (length 3)")
+            else:
+                checks.append(f"order={order} (expected list of length 3)")
+            
+            if isinstance(distance, (int, float)):
+                checks.append(f"distance={distance} km")
+            else:
+                checks.append(f"distance={distance} (expected numeric)")
+            
+            if engine in ["osrm", "haversine"]:
+                checks.append(f"engine={engine}")
+            else:
+                checks.append(f"engine={engine} (expected osrm or haversine)")
+            
+            all_valid = ok is True and isinstance(order, list) and len(order) == 3 and \
+                       isinstance(distance, (int, float)) and engine in ["osrm", "haversine"]
+            
+            if all_valid:
+                result.pass_test("Optimize with transport_id/name", ", ".join(checks))
+            else:
+                result.fail_test("Optimize with transport_id/name", ", ".join(checks))
+        else:
+            result.fail_test("Optimize with transport_id/name", f"Status {status}, Response: {data}")
+    
+    # ========================================================================
+    # STEP 6: Save + list + delete transports-based route
+    # ========================================================================
+    print(f"\n{BLUE}STEP 6: Save, list, and delete route{RESET}")
+    
+    saved_route_id = None
+    
+    # Save route
+    route_payload = {
+        "name": "Delhi-Chd Run",
         "stops": [
-            {
-                "customer": "A",
-                "material": "Stand",
-                "destination": "Delhi",
-                "lat": 28.6139,
-                "lng": 77.2090
-            },
-            {
-                "customer": "B",
-                "material": "Pin",
-                "destination": "Chandigarh",
-                "lat": 30.7333,
-                "lng": 76.7794
-            }
+            {"transport_id": ludhiana_id, "name": "Ludhiana Depot", "lat": 30.8978, "lng": 75.8528},
+            {"transport_id": delhi_id, "name": "Delhi Yard", "lat": 28.6139, "lng": 77.2090},
+            {"transport_id": chd_depot_id, "name": "Chandigarh Depot", "lat": 30.74, "lng": 76.78}
         ]
     }
     
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        log_info(f"POST {url}")
-        log_info(f"Payload: {json.dumps(payload, indent=2)}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            # Verify expected structure
-            if "ok" in data and data["ok"] is True:
-                if "order" in data and isinstance(data["order"], list):
-                    if len(data["order"]) == 2:
-                        if set(data["order"]) == {0, 1}:
-                            if "total_distance_km" in data and isinstance(data["total_distance_km"], (int, float)):
-                                if "engine" in data and data["engine"] in ["osrm", "haversine"]:
-                                    log_pass(f"Optimize successful with engine={data['engine']}")
-                                    log_info(f"Order: {data['order']}, Distance: {data['total_distance_km']} km")
-                                    return True
-                                else:
-                                    log_fail(f"Optimize engine invalid: {data.get('engine')}")
-                                    return False
-                            else:
-                                log_fail("Optimize response missing or invalid 'total_distance_km'")
-                                return False
-                        else:
-                            log_fail(f"Optimize order contains invalid indices: {data['order']}")
-                            return False
-                    else:
-                        log_fail(f"Optimize order length mismatch: expected 2, got {len(data['order'])}")
-                        return False
-                else:
-                    log_fail("Optimize response missing 'order' array")
-                    return False
-            else:
-                log_fail("Optimize response missing 'ok: true'")
-                return False
-        else:
-            log_fail(f"Optimize endpoint failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        log_fail(f"Optimize endpoint request failed: {e}")
-        return False
-
-def test_save_route(token: str) -> Optional[str]:
-    """Test 4: POST /api/transport/routes - save a route"""
-    log_test("Step 4: POST /api/transport/routes (save route)")
-    url = f"{BASE_URL}/transport/routes"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {
-        "name": "Test Route 1",
-        "stops": [
-            {
-                "customer": "A",
-                "material": "Stand",
-                "destination": "Delhi",
-                "lat": 28.6139,
-                "lng": 77.2090
-            },
-            {
-                "customer": "B",
-                "material": "Pin",
-                "destination": "Chandigarh",
-                "lat": 30.7333,
-                "lng": 76.7794
-            }
-        ],
-        "optimized_order": [0, 1],
-        "total_distance_km": 250.5,
-        "total_duration_min": 180,
-        "geometry": ""
-    }
+    status, data, success = make_request(
+        "POST", "/transport/routes", admin_token,
+        route_payload,
+        200
+    )
     
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        log_info(f"POST {url}")
-        log_info(f"Payload: {json.dumps(payload, indent=2)}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            if "id" in data and "created_at" in data:
-                log_pass(f"Route saved successfully with id={data['id']}")
-                return data["id"]
-            else:
-                log_fail("Save route response missing 'id' or 'created_at'")
-                return None
-        else:
-            log_fail(f"Save route endpoint failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
-            return None
-    except Exception as e:
-        log_fail(f"Save route endpoint request failed: {e}")
-        return None
-
-def test_list_routes(token: str, expected_route_id: Optional[str] = None) -> bool:
-    """Test 5: GET /api/transport/routes - list routes"""
-    log_test("Step 5: GET /api/transport/routes (list routes)")
-    url = f"{BASE_URL}/transport/routes"
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        log_info(f"GET {url}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            if isinstance(data, list):
-                log_pass(f"List routes successful: found {len(data)} routes")
-                
-                if expected_route_id:
-                    found = any(route.get("id") == expected_route_id for route in data)
-                    if found:
-                        log_pass(f"Route with id={expected_route_id} found in list")
-                        return True
-                    else:
-                        log_fail(f"Route with id={expected_route_id} NOT found in list")
-                        return False
-                return True
-            else:
-                log_fail("List routes response is not an array")
-                return False
-        else:
-            log_fail(f"List routes endpoint failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        log_fail(f"List routes endpoint request failed: {e}")
-        return False
-
-def test_delete_route(token: str, route_id: str) -> bool:
-    """Test 6: DELETE /api/transport/routes/{id}"""
-    log_test(f"Step 6: DELETE /api/transport/routes/{route_id}")
-    url = f"{BASE_URL}/transport/routes/{route_id}"
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    try:
-        response = requests.delete(url, headers=headers, timeout=10)
-        log_info(f"DELETE {url}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            log_info(f"Response: {json.dumps(data, indent=2)}")
-            
-            if "ok" in data and data["ok"] is True:
-                log_pass(f"Route deleted successfully")
-                return True
-            else:
-                log_fail("Delete route response missing 'ok: true'")
-                return False
-        else:
-            log_fail(f"Delete route endpoint failed with status {response.status_code}")
-            log_info(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        log_fail(f"Delete route endpoint request failed: {e}")
-        return False
-
-def test_negative_cases(token: str) -> Dict[str, bool]:
-    """Test 7: Negative test cases"""
-    results = {}
-    
-    # 7a: Empty stops in optimize
-    log_test("Step 7a: POST /api/transport/optimize with empty stops (expect 400)")
-    url = f"{BASE_URL}/transport/optimize"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"stops": []}
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        log_info(f"POST {url}")
-        log_info(f"Payload: {json.dumps(payload, indent=2)}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 400:
-            log_pass("Empty stops correctly rejected with 400")
-            results["empty_stops"] = True
-        else:
-            log_fail(f"Expected 400, got {response.status_code}")
-            log_info(f"Response: {response.text}")
-            results["empty_stops"] = False
-    except Exception as e:
-        log_fail(f"Empty stops test failed: {e}")
-        results["empty_stops"] = False
-    
-    # 7b: Empty query in geocode
-    log_test("Step 7b: POST /api/transport/geocode with empty query (expect 400)")
-    url = f"{BASE_URL}/transport/geocode"
-    payload = {"q": ""}
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        log_info(f"POST {url}")
-        log_info(f"Payload: {json.dumps(payload, indent=2)}")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code == 400:
-            log_pass("Empty query correctly rejected with 400")
-            results["empty_query"] = True
-        else:
-            log_fail(f"Expected 400, got {response.status_code}")
-            log_info(f"Response: {response.text}")
-            results["empty_query"] = False
-    except Exception as e:
-        log_fail(f"Empty query test failed: {e}")
-        results["empty_query"] = False
-    
-    # 7c: No auth header
-    log_test("Step 7c: GET /api/transport/factory without auth (expect 401/403)")
-    url = f"{BASE_URL}/transport/factory"
-    
-    try:
-        response = requests.get(url, timeout=10)
-        log_info(f"GET {url} (no auth header)")
-        log_info(f"Status: {response.status_code}")
-        
-        if response.status_code in [401, 403]:
-            log_pass(f"No auth correctly rejected with {response.status_code}")
-            results["no_auth"] = True
-        else:
-            log_fail(f"Expected 401/403, got {response.status_code}")
-            log_info(f"Response: {response.text}")
-            results["no_auth"] = False
-    except Exception as e:
-        log_fail(f"No auth test failed: {e}")
-        results["no_auth"] = False
-    
-    return results
-
-def main():
-    print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-    print(f"{Colors.BLUE}Transport Routes Backend API Test Suite{Colors.RESET}")
-    print(f"{Colors.BLUE}Base URL: {BASE_URL}{Colors.RESET}")
-    print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")
-    
-    # Step 0: Login
-    token = login()
-    if not token:
-        print(f"\n{Colors.RED}CRITICAL: Login failed. Cannot proceed with tests.{Colors.RESET}")
-        sys.exit(1)
-    
-    results = {}
-    
-    # Step 1: Factory endpoint
-    results["factory"] = test_factory_endpoint(token)
-    
-    # Step 2: Geocode endpoint
-    results["geocode"] = test_geocode_endpoint(token)
-    
-    # Step 3: Optimize endpoint
-    results["optimize"] = test_optimize_endpoint(token)
-    
-    # Step 4: Save route
-    route_id = test_save_route(token)
-    results["save_route"] = route_id is not None
-    
-    # Step 5: List routes (verify saved route exists)
-    if route_id:
-        results["list_routes"] = test_list_routes(token, route_id)
+    if success and "id" in data:
+        saved_route_id = data["id"]
+        result.pass_test(
+            "Save route", 
+            f"ID: {saved_route_id}, name: {data.get('name')}, created_at: {data.get('created_at')}"
+        )
     else:
-        results["list_routes"] = test_list_routes(token)
+        result.fail_test("Save route", f"Status {status}, Response: {data}")
     
-    # Step 6: Delete route
-    if route_id:
-        results["delete_route"] = test_delete_route(token, route_id)
-        
-        # Verify route is gone
-        log_test("Step 6b: Verify route is deleted (GET /api/transport/routes)")
-        url = f"{BASE_URL}/transport/routes"
-        headers = {"Authorization": f"Bearer {token}"}
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                found = any(route.get("id") == route_id for route in data)
-                if not found:
-                    log_pass(f"Route with id={route_id} successfully removed from list")
-                    results["verify_delete"] = True
-                else:
-                    log_fail(f"Route with id={route_id} still exists after deletion")
-                    results["verify_delete"] = False
+    # List routes
+    status, data, success = make_request("GET", "/transport/routes", admin_token, None, 200)
+    if success and isinstance(data, list):
+        found = any(r.get("id") == saved_route_id for r in data)
+        if found:
+            result.pass_test("List routes", f"Found saved route in list (total {len(data)} routes)")
+        else:
+            result.fail_test("List routes", f"Saved route {saved_route_id} not found in list")
+    else:
+        result.fail_test("List routes", f"Status {status}, Response: {data}")
+    
+    # Delete route
+    if saved_route_id:
+        status, data, success = make_request(
+            "DELETE", f"/transport/routes/{saved_route_id}", admin_token,
+            None, 200
+        )
+        if success and data.get("ok") is True:
+            result.pass_test("Delete route", f"Route {saved_route_id} deleted successfully")
+        else:
+            result.fail_test("Delete route", f"Status {status}, Response: {data}")
+    
+    # ========================================================================
+    # STEP 7: Auth / role checks
+    # ========================================================================
+    print(f"\n{BLUE}STEP 7: Auth and role checks{RESET}")
+    
+    if not user_token:
+        result.fail_test("Auth tests", "User token not available")
+    else:
+        # Non-admin tries to delete transport (should get 403)
+        ludhiana_id = transport_ids.get("Ludhiana Depot")
+        if ludhiana_id:
+            status, data, success = make_request(
+                "DELETE", f"/transports/{ludhiana_id}", user_token,
+                None, 403
+            )
+            if success:
+                result.pass_test("Non-admin DELETE transport", f"Got 403 as expected: {data.get('detail')}")
             else:
-                log_fail(f"Failed to verify deletion: status {response.status_code}")
-                results["verify_delete"] = False
-        except Exception as e:
-            log_fail(f"Failed to verify deletion: {e}")
-            results["verify_delete"] = False
+                result.fail_test("Non-admin DELETE transport", f"Expected 403, got {status}: {data}")
+        
+        # Non-admin can list transports
+        status, data, success = make_request("GET", "/transports", user_token, None, 200)
+        if success:
+            result.pass_test("Non-admin GET transports", f"Got 200, {len(data)} transports listed")
+        else:
+            result.fail_test("Non-admin GET transports", f"Expected 200, got {status}: {data}")
+        
+        # Non-admin can create transport
+        status, data, success = make_request(
+            "POST", "/transports", user_token,
+            {"name": "User Test Transport", "lat": 30.5, "lng": 75.5},
+            200
+        )
+        if success and "id" in data:
+            user_transport_id = data["id"]
+            result.pass_test("Non-admin POST transport", f"Created transport ID: {user_transport_id}")
+            # Clean up this test transport
+            make_request("DELETE", f"/transports/{user_transport_id}", admin_token, None, 200)
+        else:
+            result.fail_test("Non-admin POST transport", f"Expected 200, got {status}: {data}")
+    
+    # No auth header (should get 401 or 403)
+    status, data, success = make_request("GET", "/transports", None, None, 403)
+    if status in [401, 403]:
+        result.pass_test("No auth header", f"Got {status} as expected")
     else:
-        results["delete_route"] = False
-        results["verify_delete"] = False
+        result.fail_test("No auth header", f"Expected 401 or 403, got {status}: {data}")
     
-    # Step 7: Negative cases
-    negative_results = test_negative_cases(token)
-    results.update(negative_results)
+    # ========================================================================
+    # STEP 8: Cleanup
+    # ========================================================================
+    print(f"\n{BLUE}STEP 8: Cleanup (delete test transports){RESET}")
     
-    # Summary
-    print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-    print(f"{Colors.BLUE}TEST SUMMARY{Colors.RESET}")
-    print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")
+    for name, tid in transport_ids.items():
+        status, data, success = make_request("DELETE", f"/transports/{tid}", admin_token, None, 200)
+        if success:
+            print(f"  {GREEN}✓{RESET} Deleted {name} ({tid})")
+        else:
+            print(f"  {YELLOW}⚠{RESET} Failed to delete {name}: {status} {data}")
     
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    
-    for test_name, passed_flag in results.items():
-        status = f"{Colors.GREEN}PASS{Colors.RESET}" if passed_flag else f"{Colors.RED}FAIL{Colors.RESET}"
-        print(f"{test_name:20s}: {status}")
-    
-    print(f"\n{Colors.BLUE}Total: {passed}/{total} tests passed{Colors.RESET}")
-    
-    if passed == total:
-        print(f"{Colors.GREEN}✓ All tests passed!{Colors.RESET}\n")
-        sys.exit(0)
-    else:
-        print(f"{Colors.RED}✗ Some tests failed.{Colors.RESET}\n")
-        sys.exit(1)
+    # Final summary
+    return result.summary()
 
 if __name__ == "__main__":
-    main()
+    success = test_transports_master()
+    sys.exit(0 if success else 1)
