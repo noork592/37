@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import {
   MapPin, Factory, Plus, Trash2, Route as RouteIcon, Save, Loader2, ListChecks,
-  Map as MapIcon, Satellite, Pencil, Check, X, Crosshair, Truck, Navigation, Copy, ExternalLink,
+  Map as MapIcon, Satellite, Pencil, Check, X, Crosshair, Truck, Navigation, Copy, ExternalLink, Search,
 } from "lucide-react";
 
 // Marker icon default asset shim (react-leaflet's defaults 404 without this).
@@ -209,6 +209,7 @@ export default function TransportRoutes() {
   const [busy, setBusy] = useState({ adding: false, optimizing: false, saving: false });
   const [result, setResult] = useState(null);            // {order, total_distance_km, total_duration_min, geometry, engine}
   const [mapStyle, setMapStyle] = useState("map");
+  const [searchQ, setSearchQ] = useState("");
   const autoTimer = useRef(null);
 
   const loadAll = async () => {
@@ -231,6 +232,17 @@ export default function TransportRoutes() {
     () => transports.filter((t) => selected[t.id]),
     [transports, selected]
   );
+
+  // Filter for the search box in the "Select transports" panel. Case-insensitive,
+  // matches name and coordinate substrings so operators can find "30.9" too.
+  const filteredTransports = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    if (!q) return transports;
+    return transports.filter((t) => {
+      const hay = `${t.name} ${t.lat} ${t.lng}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [transports, searchQ]);
 
   // ── Auto-optimize whenever the selection changes (debounced 400ms). ─────
   useEffect(() => {
@@ -489,8 +501,35 @@ export default function TransportRoutes() {
               No transports yet — add one on the left.
             </div>
           ) : (
-            <div className="space-y-1.5 max-h-80 overflow-auto pr-1" data-testid="tr-list">
-              {transports.map((t) => {
+            <>
+              {/* Task 1 — quick search over the transport master */}
+              <div className="relative mb-2">
+                <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <Input
+                  value={searchQ}
+                  onChange={(e) => setSearchQ(e.target.value)}
+                  placeholder="Search transports by name…"
+                  className="h-9 rounded-sm pl-9 pr-8"
+                  data-testid="tr-search"
+                />
+                {searchQ && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQ("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    aria-label="Clear search"
+                    data-testid="tr-search-clear"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1.5 max-h-80 overflow-auto pr-1" data-testid="tr-list">
+                {filteredTransports.length === 0 ? (
+                  <div className="text-sm text-slate-400 text-center py-6" data-testid="tr-search-empty">
+                    No transports match "{searchQ}".
+                  </div>
+                ) : filteredTransports.map((t) => {
                 const isEditing = editingId === t.id;
                 return (
                   <div
@@ -556,7 +595,8 @@ export default function TransportRoutes() {
                   </div>
                 );
               })}
-            </div>
+              </div>
+            </>
           )}
 
           {/* Route summary + save */}
@@ -641,6 +681,60 @@ export default function TransportRoutes() {
           )}
         </div>
       </div>
+
+      {/* Task 2 — Route sequence list: shows the order of stops (factory → 1 → 2 → …)
+          before the map so the operator can see the visit sequence at a glance. */}
+      {orderedStops.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-sm p-4" data-testid="tr-sequence">
+          <div className="flex items-center gap-2 mb-2">
+            <ListChecks className="w-4 h-4 text-[#E65100]" />
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              Route sequence
+            </span>
+            {result?.total_distance_km != null && (
+              <span className="ml-auto text-[11px] font-bold text-slate-700">
+                Total: <span className="text-[#E65100] font-mono-num">{result.total_distance_km} km</span>
+                {result.total_duration_min ? (
+                  <> · <span className="font-mono-num">~{Math.round(result.total_duration_min)} min</span></>
+                ) : null}
+              </span>
+            )}
+          </div>
+          <ol className="space-y-1.5" data-testid="tr-sequence-list">
+            <li className="flex items-center gap-3 border border-slate-200 rounded-sm px-2.5 py-2 bg-amber-50">
+              <span className="shrink-0 w-7 h-7 rounded-sm bg-slate-900 text-amber-300 text-[10px] font-black flex items-center justify-center">JK</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-slate-900">Start · Factory</div>
+                <div className="text-[11px] text-slate-500 font-mono-num">
+                  {Number(factory.lat).toFixed(4)}, {Number(factory.lng).toFixed(4)}
+                </div>
+              </div>
+            </li>
+            {orderedStops.map((t, i) => (
+              <li
+                key={`seq-${t.id || t.transport_id || i}`}
+                className="flex items-center gap-3 border border-slate-200 rounded-sm px-2.5 py-2 bg-slate-50"
+                data-testid={`tr-sequence-row-${i}`}
+              >
+                <span className="shrink-0 w-7 h-7 rounded-full bg-[#E65100] text-white text-[12px] font-black flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-slate-900 truncate">{t.name}</div>
+                  <div className="text-[11px] text-slate-500 font-mono-num">
+                    {Number(t.lat).toFixed(4)}, {Number(t.lng).toFixed(4)}
+                  </div>
+                </div>
+                {i === orderedStops.length - 1 && (
+                  <span className="text-[10px] uppercase font-bold text-[#E65100] px-2 py-0.5 rounded-sm border border-[#E65100]">
+                    Final stop
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       {/* Map */}
       <div className="bg-white border border-slate-200 rounded-sm overflow-hidden">

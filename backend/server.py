@@ -7847,6 +7847,50 @@ async def delete_transport_route(rid: str, _user=Depends(require_admin)):
     return {"ok": True}
 
 
+@api_router.get("/transport/bags-by-date")
+async def transport_bags_by_date(date: Optional[str] = None, _user=Depends(get_current_user)):
+    """Aggregate dispatches by transport_name for a given IST day and return
+    {transport_name -> total_bags, dispatches, customers} so the Transport
+    Routes sequence view can show how many bags are going via each transport.
+    """
+    IST = timezone(timedelta(hours=5, minutes=30))
+    today_ist = datetime.now(IST).date()
+    if date:
+        try:
+            target = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    else:
+        target = today_ist
+    start = datetime.combine(target, datetime.min.time(), tzinfo=IST).astimezone(timezone.utc).isoformat()
+    end = datetime.combine(target, datetime.max.time(), tzinfo=IST).astimezone(timezone.utc).isoformat()
+    docs = await db.dispatches.find(
+        {"dispatched_at": {"$gte": start, "$lte": end}},
+        {"_id": 0, "transport_name": 1, "bag_count": 1, "customer_name": 1, "customer_id": 1},
+    ).to_list(5000)
+    agg: Dict[str, Dict[str, Any]] = {}
+    for d in docs:
+        nm = (d.get("transport_name") or "").strip()
+        if not nm:
+            continue
+        key = nm.lower()
+        entry = agg.get(key)
+        if entry is None:
+            entry = {
+                "transport_name": nm,
+                "total_bags": 0,
+                "dispatch_count": 0,
+                "customers": [],
+            }
+            agg[key] = entry
+        entry["total_bags"] += int(d.get("bag_count") or 0)
+        entry["dispatch_count"] += 1
+        cn = d.get("customer_name") or ""
+        if cn and cn not in entry["customers"]:
+            entry["customers"].append(cn)
+    return {"date": target.isoformat(), "by_transport": list(agg.values())}
+
+
 app.include_router(api_router)
 # The platform's liveness/readiness probe calls `GET /health` at the ROOT
 # (no /api prefix). Without this route the probe gets a 404 and the pod is

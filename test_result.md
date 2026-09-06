@@ -306,6 +306,41 @@ backend:
             5) Click the cluster — popup should list both transport names with their visit order.
             6) Uncheck one — remaining one becomes a normal single label pill; the unselected one becomes a dot.
 
+  - task: "Transport search bar + route sequence list"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/TransportRoutes.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Two additions requested by user:
+          1) Search bar above the "Select transports for this route" list. Case-insensitive substring match
+             across name, lat and lng. Empty state message when the search returns 0 rows. Clear (X) button.
+             data-testids: `tr-search`, `tr-search-clear`, `tr-search-empty`.
+             Filter only affects which rows are DISPLAYED — it does NOT change the current selection.
+          2) A new "Route sequence" panel that appears above the map (only when at least one transport is
+             selected). Shows an ordered list starting with the Factory then each selected transport in the
+             OSRM-optimised visit order. The last item is tagged "Final stop". Also shows total km / min.
+             data-testids: `tr-sequence`, `tr-sequence-list`, `tr-sequence-row-<i>` for each stop.
+          Verify:
+            a) Log in admin@factory.com / admin123, open Dispatch Report → Transport Routes.
+            b) Add three transports with distinct names (e.g. Sharma 30.90/75.85, Delhi 28.61/77.20, Chandigarh 30.73/76.78).
+            c) In the select panel, type "sha" into `tr-search` — only "Sharma" row should be visible.
+            d) Clear the search — all three rows should reappear.
+            e) Type "zzz" — the empty-state message (`tr-search-empty`) should appear.
+            f) Clear the search, tick all three transports. Auto-optimise runs.
+            g) Between the two panels and the map, the "Route sequence" section (`tr-sequence`) must appear:
+               • First row: "Start · Factory" with the JK badge.
+               • Then rows numbered 1, 2, 3 in visit order (data-testid `tr-sequence-row-0/1/2`).
+               • Last row shows a "Final stop" badge.
+               • Header shows the total distance in km.
+            h) Uncheck one transport — the sequence updates automatically (fewer numbered rows).
+            i) Uncheck all — the sequence panel disappears (does not render an empty section).
+
   - task: "Google Maps deep link on Transport Routes"
     implemented: true
     working: "NA"
@@ -336,8 +371,8 @@ backend:
             4) Save the route. On the saved-route card, the "Google Maps" button (`tr-gmaps-<id>`) href follows the same
                rules and uses the saved `optimized_order` sequence.
             5) Copy buttons still put the same URL on the clipboard.
-            6) Opening the URL in a new tab should render a real Google Maps directions page with the route drawn
-               (verify by parsing the URL — do not need to click through, as clicking may be blocked in headless).
+
+
 
 
     stuck_count: 0
@@ -504,8 +539,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Google Maps deep link on Transport Routes"
-    - "Transport pins show names + anti-overlap"
+    - "Transport search bar + route sequence list"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
